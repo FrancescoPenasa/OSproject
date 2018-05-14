@@ -8,66 +8,138 @@
 #include <string.h>
 #include "daemon.h" //TODO format function  TODO output function
 
-
 #define FORMAT 1
 #define LOG 2
 #define CMD 3
-/*#define MULT1(X,Y) X*Y			//definisco una macro.*/
+#define NPIPE 1
+#define SPIPE 2
+#define READ 0
+#define WRITE 1
+#define NOT_EXIST_PIPE 0
 
-/* tmp solution to pipe manager*/
-int pipe_manager(char *cmd, int size){
-    int i;
-    int counter=1;
-    for(i=0; i<size;i++)
-        if (cmd[i]== '|' && cmd[i+1]!='|')  //sono presenti pipe?
-            counter++; i++;                 //i++ per evitare il caso ||
-    return counter;
-}
-//pid_t pid
-void padre(char *argv[], int pid){
-    kill(pid, SIGUSR1);
-    system(argv[CMD]);
-    //execvp(argv[CMD], argv);        //execvp pipe func()
-    kill(pid, SIGUSR2);
+pid_t dpid;
+
+
+int analize_cmd (char *cmd, int *res){
+  int i;
+  int counter = 0;
+  for (i=0; i<strlen(cmd); i++) //init
+    res[i] = 0;  
+  for (i=0; i<strlen(cmd); i++){
+    if (cmd[i] == '|'){    //se trova un simbolo '|'
+      if (cmd[i+1] == '|')  //se rappresenta un OR
+	res[++i] = 0;      //non fare niente
+      else{                //ALTRIMENTI se rappresenta un PIPE or un "|&"
+	if (cmd[i+1] == '&'){
+	  res[i]=2;
+	  counter++;
+	}
+	if (cmd[i+1] != '&'){
+	  res[i]=1;
+	  counter++;
+	}
+      }
+    }
+  }
+  return counter;
 }
 
-void execution(char *argv[], int pipe){
-    if (pipe != 1){/*todo tmp solution to pipemanager*/
-        printf ("Not ready yet.");
-        exit(EXIT_SUCCESS);
-    }                 
-    figlio();
-    int pid = fork();       //if not exist daemon    
-    if(pid==0)
-        sleep(2);
-    else
-        padre(argv, pid);
+/* DA SISTEMARE TUTTOTS*/
+void execution(char *argv, int istart, int istop){     //neeed to divide the cmd
+  kill(dpid, SIGUSR1);
+  system(argv);
+  //char *arg[]={"ls","-l",NULL};
+  //execvp(arg[0],arg);
+  wait(NULL);
+  kill(dpid, SIGUSR2); 
 }
+
+void exec_pipe(char *cmd, int first, int limit, int end, char type){
+  if (type=='n'){
+    int fd [2];
+    pipe (fd); /* Create an unamed pipe */
+    if (fork () != 0) { /* Parent, writer */
+      close (fd[READ]); /* Close unused end */
+      dup2 (fd[WRITE], 1); /* Duplicate used end to stdout */
+      close (fd[WRITE]); /* Close original used end */
+      execution(cmd, first, limit);
+      //execvp (cmd[0], cmd, NULL); /* Execute writer program */       ////7to manage all the execlp
+      //perror ("connect"); /* Should never execute */
+    } else { /* Child, reader */
+      close (fd[WRITE]); /* Close unused end */
+      dup2 (fd[READ], 0); /* Duplicate used end to stdin */
+      close (fd[READ]); /* Close original used end */
+      execution(cmd, limit+1,end);
+      //execvp (argv[2], argv[2], NULL); /* Execute reader program */
+      //perror ("connect"); /* Should never execute */
+    }
+  }
+  if (type=='s'){
+    int fd [2];
+    pipe (fd); /* Create an unamed pipe */
+    if (fork () != 0) { /* Parent, writer */
+      close (fd[READ]); /* Close unused end */
+      dup2 (fd[WRITE], 1); /* Duplicate used end to stdout */
+      dup2 (fd[WRITE], 2); /* Duplicate used end to stderr, this is required by '|&' */
+      close (fd[WRITE]); /* Close original used end */
+      execution(cmd, first,limit);
+      //execvp (argv[1], argv[1], NULL); /* Execute writer program */
+      //perror ("connect"); /* Should never execute */
+    } else { /* Child, reader */
+      close (fd[WRITE]); /* Close unused end */
+      dup2 (fd[READ], 0); /* Duplicate used end to stdin */
+      close (fd[READ]); /* Close original used end */
+      execution(cmd, limit+2,end);
+      //execvp (argv[2], argv[2], NULL); /* Execute reader program */
+      //perror ("connect"); /* Should never execute */
+    }
+  }
+}
+
+
+void pipe_handler(char *cmd, int *res){
+  int i;
+  for (i=0;i<strlen(cmd);i++){
+    if (res[i]==NPIPE){//todopipe
+      exec_pipe(cmd,0,i,strlen(cmd),'n');  //funziona solo con una pipe
+      i=strlen(cmd);    //<<-- per uscire dal ciclo, non so usare più di una pipe
+    } 
+    if (res[i]==SPIPE){//todospipe
+      exec_pipe(cmd,0,i,strlen(cmd),'s');      
+      i=strlen(cmd);
+    }
+  }
+}
+
+/******** DA FARE */
+void cmd_handler(char *cmd){
+  execution(cmd,0,strlen(cmd));
+}
+
  /*./runexe $format $log $cmd*/
 int main(int argc, char *argv[]){
-    //input manager if i cant do the script
-    //int pipe = pipe_manager(argv[CMD],strlen(argv[LOG]));    // TODO redirect function test2.c if needed
-    execution(argv,1);
-    //communicate(argv[LOG]);
-    // TODO chiama il logger, evoca il logger 
-    exit(EXIT_SUCCESS);
+  //input manager(argv);
+  pid_t daemon_pid = create_daemon(argv[FORMAT], argv[LOG]);
+  dpid = daemon_pid;
+  printf("dai dai");
+  fflush(stdout);
+  int res [strlen(argv[CMD])];
+  if (analize_cmd(argv[CMD], res) != 0)
+    pipe_handler(argv[CMD],res);
+  else
+    cmd_handler(argv[CMD]);
+  exit(EXIT_SUCCESS);
 }
 
-/*
-//called by the daemon  /output_writer(argv[LOG],strlen(argv[LOG]));
-void output_writer(char *output, int size){
-	FILE *fp;  				    //open stream
-	fp = fopen(output,O_WRONLY);		//stream bind to file, and access mode (read,write)
-	fprintf(fp,"\n\n\t");       //format type			
-    fprintf(fp,"%s", stringa);			
-	fclose(fp);					//close stream
-	return(0);
+
+
+
+
+
+//NICE SHIT TO DO
+/*  
+void die(const char *msg) {
+    perror(msg);
+    exit(EXIT_FAILURE);
 }
 */
-//called after the exec
-//void logger(){
-    //se non esiste
-    //pid = fork()
-    //if (pid !=0) return
-    //else create logger
-//}
