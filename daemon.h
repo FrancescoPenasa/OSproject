@@ -3,10 +3,10 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <syslog.h>
 #include <fcntl.h> //read write
 #include <unistd.h>
 #include <string.h>
-#include <sys/types.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/stat.h>  
@@ -14,56 +14,38 @@
 #define START 0
 #define END 1
 #define MAXPID 17
-extern int errno;
 
 time_t start_clock, stop_clock;
 char *output_format = "0";
 char *output_file = "Log.txt";
-
+pid_t dpid;
+FILE *fp;
+char *pidlog = "daemon_pid.txt";  
 
 void signal_handler();
-void output_manager(){
-  FILE *fp;
-  fp = fopen("MYFILE.txt", "a");
-  fprintf(fp, "%s\n ", "Hello World, Where there is will, there is a way.");
-  fclose(fp) ;
-}
 
 /* prende il segnale di inizio e fine processo per registrare i dati */
 void sighandle_int(int sig) {
   
   /*END OF THE EXECUTION*/
-  if (sig == SIGUSR2){                              
-    stop_clock = time_w(); //stop counting  
-    
-    time_t current_time;
-    char *c_time_string;
-    current_time = time_w(NULL);              // start time	
-    c_time_string = ctime_w(&current_time);   // start time in readable format
-
+  if (sig == SIGUSR2){    
+    printf("hey man, here is: %d\n",getpid());                           
     printf("\n\n ---- STOP  ---- \n\n");
     fflush(stdout);
-    //        printf("Error: wrong signal code\n");
   }
+
 
   /*START OF THE EXECUTION*/
   else if (sig == SIGUSR1){
-    time_t current_time;
-    char *c_time_string;
-    current_time = time_w(NULL);              // start time	
-    c_time_string = ctime_w(&current_time);   // start time in readable format
-
-    //output_manager();
     printf("\n\n ---- START  ---- \n\n");
     fflush(stdout);
-
-    start_clock = time_w(); //start counting   ///potrebbe andare più giù
   }
+
   else
     printf("Error: Signal: %d not handled by this function",sig);
   signal_handler();
-  exit(EXIT_SUCCESS);
-
+  sleep(1);
+  //exit(EXIT_SUCCESS);
 }
 
 /* init signal SIGUSR1 and SIGUSR2 */
@@ -72,63 +54,98 @@ void signal_handler() {
   signal(SIGUSR2, sighandle_int);
 }
 
-/* if daemon already exist return his pid else create a daemon and return his pid*/
-/* pid is saved in a .txt file */
-/* d_pid = create_daemon(int format, char * output)*/
-pid_t create_daemon(char *format, char *output){
-  FILE *fp, *file;
-  char *pidlog = "daemon_pid.txt";
-  fp = fopen (pidlog,"r");
-  int i;
-  pid_t process_id = 0; 
-  pid_t sid = 0;
-  output_format = format; 
-  output_file = output;
-  signal_handler();
-
-  //https://stackoverflow.com/questions/17954432/creating-a-daemon-in-linux
-  if (!fp){ //must create the process
-    process_id = fork();
-    if (process_id > 0)
-      exit(EXIT_SUCCESS);      
-    sid = setsid();  //set new session; setsid_w();
-    signal(SIGCHLD, SIG_IGN);
-    signal(SIGHUP, SIG_IGN);
-
-    process_id = fork();   //fork_w neeeeed
-    if (process_id > 0){ // PARENT PROCESS. Need to kill it.
-        printf("process_id of CREATEDdaemon process %d \n", process_id);
-        file = fopen(pidlog, "w");
-        fprintf(file, "%d", process_id);
-        fclose (file);
-	return process_id;
-      }
-    umask(0);
-
-    //chdir("/"); // Change the current working directory to root. 
-    
-    close(STDIN_FILENO); // Close stdin. stdout and stderr
-    close(STDOUT_FILENO);
-    close(STDERR_FILENO);
-    
-    //while (1) //mantain the daemon alive
-      //sleep(1);
-    
+int daemonize(char* name, char* path, char* outfile, char* errfile, char* infile ){
+  if(!path) { path="/home/chrx/OS/env"; }
+  if(!name) { name="medaemon"; }
+  if(!infile) { infile="/dev/null"; }
+  if(!outfile) { outfile="/dev/null"; }
+  if(!errfile) { errfile="/dev/null"; }
+  //printf("%s %s %s %s\n",name,path,outfile,infile);
+  pid_t child;
+  //fork, detach from process group leader
+  if( (child=fork())<0 ) { //failed fork
+    fprintf(stderr,"error: failed fork\n");
+    exit(EXIT_FAILURE);
   }
-  else  {//return the pid of the existing daemon
-    fscanf(fp,"%d",&process_id);
-    fclose(fp);
-    printf("process_id of EXISTdaemon process %d \n", process_id);
-    signal_handler();
-    return process_id;
+  if (child>0) { //parent
+    exit(EXIT_SUCCESS);
   }
+  if( setsid()<0 ) { //failed to become session leader
+    fprintf(stderr,"error: failed setsid\n");
+    exit(EXIT_FAILURE);
+  }
+  //catch/ignore signals
+  signal(SIGCHLD,SIG_IGN);
+  signal(SIGHUP,SIG_IGN);
+  signal_handler(); 
+  
+  //fork second time
+  if ( (child=fork())<0) { //failed fork
+    fprintf(stderr,"error: failed fork\n");
+    exit(EXIT_FAILURE);
+  }
+  if( child>0 ) { //parent
+    dpid=child;
+    fprintf(stdout,"dpid= %d",dpid);
+    exit(EXIT_SUCCESS);
+  }
+  //new file permissions
+  umask(0);
+  //change to path directory
+  //chdir(path);
 
+  //Close all open file descriptors
+  int fd;
+  /*for( fd=sysconf(_SC_OPEN_MAX); fd>0; --fd )
+    {
+      close(fd);
+    }
+*/
+  //reopen stdin, stdout, stderr
+  //stdin=fopen(infile,"r");   //fd=0
+  //stdout=fopen(outfile,"w+");  //fd=1
+  //stderr=fopen(errfile,"w+");  //fd=2
   
-  printf("Daemon terminated");
-  remove(pidlog);
-  
-  return 0;
+  //open syslog
+  openlog(name,LOG_PID,LOG_DAEMON);
+  fprintf(stdout, "name: %s\nLOG_PID: %d\nLOG_DAEMON: %d",name,LOG_PID,LOG_DAEMON);
+
+  //scrivo il pid
+  printf("process_id of CREATEDdaemon process %d \n", getpid());
+  fflush(stdout);
+  fp = fopen(pidlog, "w");
+  fprintf(fp, "%d", getpid());
+  fclose (fp);
+  while(1) {
+    sleep(1);
+  }
+  return(0);
 }
 
+/* if daemon already exist return his pid else create a daemon and return his pid*/
+/* pid is saved in a .txt file */
+//./a.out pippo logsasd.txt "ls -l"
+/* d_pid = create_daemon(int format, char * output)*/
+pid_t create_daemon(char *format, char *output){
+  fp = fopen (pidlog,"r");
+  output_format = format; 
+  output_file = output;
+
+  if (fp==NULL){ //if daemon don't exist
+    if (fork()==0){
+      daemonize("mydaemon",NULL,NULL,NULL,NULL);
+      return dpid;
+    }
+  }
+  while(fp==NULL)
+    fp=fopen(pidlog,"r");
+  fscanf(fp,"%d",&dpid);
+  fclose(fp);
+  printf("process_id of EXISTdaemon process %d \n", dpid);
+  signal_handler();
+  return dpid;
+  
+  
+}
 
 

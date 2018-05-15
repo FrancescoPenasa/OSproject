@@ -19,7 +19,6 @@
 
 pid_t dpid;
 
-
 int analize_cmd (char *cmd, int *res){
   int i;
   int counter = 0;
@@ -46,12 +45,15 @@ int analize_cmd (char *cmd, int *res){
 
 /* DA SISTEMARE TUTTOTS*/
 void execution(char *argv, int istart, int istop){     //neeed to divide the cmd
-  kill(dpid, SIGUSR1);
+  int j;
+  j =kill(dpid, SIGUSR1);
+  printf("arrivato fin qui");
+  fflush(stdout);
   system(argv);
-  //char *arg[]={"ls","-l",NULL};
-  //execvp(arg[0],arg);
-  wait(NULL);
-  kill(dpid, SIGUSR2); 
+  //wait(NULL);
+  int i = kill(dpid, SIGUSR2);
+  printf("kill = %d%d",j,i); 
+  printf("dpid = %d",dpid);
 }
 
 void exec_pipe(char *cmd, int first, int limit, int end, char type){
@@ -128,6 +130,7 @@ int main(int argc, char *argv[]){
     pipe_handler(argv[CMD],res);
   else
     cmd_handler(argv[CMD]);
+  wait(NULL);
   exit(EXIT_SUCCESS);
 }
 
