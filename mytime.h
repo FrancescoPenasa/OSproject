@@ -1,6 +1,4 @@
 #include <time.h>
-#include <stdlib.h>
-#include <stdio.h>
 
 /**Usage: 
  *time_w() to get current time. 
@@ -42,7 +40,7 @@ char *ctime_w(time_t *time){
 
 
 #if DEBUG
-//test case
+//test case.c
 int main (){ 
   time_t current_time, start, end;
   char *c_time_string;

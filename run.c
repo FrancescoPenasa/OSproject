@@ -1,148 +1,117 @@
-#include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <fcntl.h>
 #include <sys/ipc.h>
+#include <sys/stat.h>
 #include <signal.h>
 #include <unistd.h>
 #include <string.h>
 #include "daemon.h" //TODO format function  TODO output function
+#include "cmdanalizer.h"
+#include "redirection.h" //redirect_stdout(char *), redirect_stderr(char*) 
 
 #define FORMAT 1
 #define LOG 2
 #define CMD 3
-#define NPIPE 1
-#define SPIPE 2
-#define READ 0
-#define WRITE 1
-#define NOT_EXIST_PIPE 0
+#define ERRFILE 4
+#define OUTFILE 5
+
+#define MAXWRITE 100
+#define MAXCMD 120
 
 pid_t dpid;
+int outredirect = 0; //works as a boolean
+char *outfile;
+int errredirect = 0; //works as a boolean
+char *errfile;
 
-int analize_cmd (char *cmd, int *res){
-  int i;
-  int counter = 0;
-  for (i=0; i<strlen(cmd); i++) //init
-    res[i] = 0;  
-  for (i=0; i<strlen(cmd); i++){
-    if (cmd[i] == '|'){    //se trova un simbolo '|'
-      if (cmd[i+1] == '|')  //se rappresenta un OR
-	res[++i] = 0;      //non fare niente
-      else{                //ALTRIMENTI se rappresenta un PIPE or un "|&"
-	if (cmd[i+1] == '&'){
-	  res[i]=2;
-	  counter++;
-	}
-	if (cmd[i+1] != '&'){
-	  res[i]=1;
-	  counter++;
-	}
-      }
-    }
-  }
-  return counter;
+void write_info(char *cmd, int res);
+/*
+void reset_daemon(){
+    char *filename = "daemon_pid.txt";
+    open();
+    read();
+    char *cmd = strcat("kill ", dpid);
+    system(cmd);
+    close();
+    remove(filename);
+}
+*/
+void execution(char *argv, int istart, int istop){     
+  char cmd[MAXCMD];
+  int result;
+  parsecmd(argv, istart, istop, cmd);       //divide il cmd con istart e istop, utile per un eventuale pipe.
+  
+  //redireziono se necessario stdout e stderr
+  if (outredirect!=0 && istop==strlen(argv))                       
+    redirect_stdout(outfile);
+  if (errredirect!=0 && istop==strlen(argv))
+    redirect_stderr(errfile);
+  
+  
+  int i=kill(dpid, SIGUSR1); //start clock
+  result = system(cmd);         //exec cmd
+  int j =kill(dpid, SIGUSR2); //stop clock
+  
+  write_info(cmd, result);
+  int k =0;
+  k= kill(dpid, SIGINT);  //stampa risultati su file
+  printf("i=%d;j=%d;k=%d\n ",i,j,k);
+
+  //redireziono se necessario stdout e stderr
+  if (outredirect!=0 && istop==strlen(argv))                     
+    reset_stdout();
+  if (errredirect!=0 && istop==strlen(argv))
+    reset_stderr();
+
+  printf("\nexecuted: %s  dpid = %d\n",cmd,dpid);  //scrivo il cmd usato e il valore restituito
 }
 
-/* DA SISTEMARE TUTTOTS*/
-void execution(char *argv, int istart, int istop){     //neeed to divide the cmd
-  int j;
-  j =kill(dpid, SIGUSR1);
-  printf("arrivato fin qui");
-  fflush(stdout);
-  system(argv);
-  //wait(NULL);
-  int i = kill(dpid, SIGUSR2);
-  printf("kill = %d%d",j,i); 
-  printf("dpid = %d",dpid);
+/* scrive in inforun le informazioni riguardanti il processo eseguito */
+void write_info(char *cmd, int res){
+  char *infolog = "/tmp/inforun.txt";
+  int fd = open(infolog, O_WRONLY | O_CREAT);
+  printf("QUELLO CHE MI INTERESSAAAAAAAAAAAAAAAA%d",res);
+  int len = strlen(cmd);
+  write(fd, &len, sizeof(int));
+  write(fd, cmd, (((strlen(cmd))+1)*(sizeof(char))));                       //size?????
+  write(fd, &res, sizeof(int));
+  close(fd);
 }
 
-void exec_pipe(char *cmd, int first, int limit, int end, char type){
-  if (type=='n'){
-    int fd [2];
-    pipe (fd); /* Create an unamed pipe */
-    if (fork () != 0) { /* Parent, writer */
-      close (fd[READ]); /* Close unused end */
-      dup2 (fd[WRITE], 1); /* Duplicate used end to stdout */
-      close (fd[WRITE]); /* Close original used end */
-      execution(cmd, first, limit);
-      //execvp (cmd[0], cmd, NULL); /* Execute writer program */       ////7to manage all the execlp
-      //perror ("connect"); /* Should never execute */
-    } else { /* Child, reader */
-      close (fd[WRITE]); /* Close unused end */
-      dup2 (fd[READ], 0); /* Duplicate used end to stdin */
-      close (fd[READ]); /* Close original used end */
-      execution(cmd, limit+1,end);
-      //execvp (argv[2], argv[2], NULL); /* Execute reader program */
-      //perror ("connect"); /* Should never execute */
-    }
-  }
-  if (type=='s'){
-    int fd [2];
-    pipe (fd); /* Create an unamed pipe */
-    if (fork () != 0) { /* Parent, writer */
-      close (fd[READ]); /* Close unused end */
-      dup2 (fd[WRITE], 1); /* Duplicate used end to stdout */
-      dup2 (fd[WRITE], 2); /* Duplicate used end to stderr, this is required by '|&' */
-      close (fd[WRITE]); /* Close original used end */
-      execution(cmd, first,limit);
-      //execvp (argv[1], argv[1], NULL); /* Execute writer program */
-      //perror ("connect"); /* Should never execute */
-    } else { /* Child, reader */
-      close (fd[WRITE]); /* Close unused end */
-      dup2 (fd[READ], 0); /* Duplicate used end to stdin */
-      close (fd[READ]); /* Close original used end */
-      execution(cmd, limit+2,end);
-      //execvp (argv[2], argv[2], NULL); /* Execute reader program */
-      //perror ("connect"); /* Should never execute */
-    }
-  }
-}
+/* scrive in /tmp/run2daemon.txt come si chiama il file di LOG e il format type 
+ * salva il nome del file dove stampare l'output e il file dove stampare gli errori se è stato attivato il flag
+*/
+void write_run2daemon(char *argv[]){
+  char *run2daemon = "/tmp/run2daemon.txt";       //save the logfile path and the format type in a file.
+  remove (run2daemon);
+  int fd = open(run2daemon, O_WRONLY | O_CREAT);
+  write(fd, argv[LOG], MAXWRITE);
+  write(fd, argv[FORMAT], MAXWRITE);
+  close(fd);
 
-
-void pipe_handler(char *cmd, int *res){
-  int i;
-  for (i=0;i<strlen(cmd);i++){
-    if (res[i]==NPIPE){//todopipe
-      exec_pipe(cmd,0,i,strlen(cmd),'n');  //funziona solo con una pipe
-      i=strlen(cmd);    //<<-- per uscire dal ciclo, non so usare più di una pipe
-    } 
-    if (res[i]==SPIPE){//todospipe
-      exec_pipe(cmd,0,i,strlen(cmd),'s');      
-      i=strlen(cmd);
-    }
+  if ((atoi(argv[OUTFILE]))!=0){                  //if the outfile is specified 
+    outredirect++;              
+    outfile=argv[OUTFILE];                       
+  }
+  if ((atoi(argv[ERRFILE]))!=0){                  //if the errfile is specified
+    errredirect++;
+    errfile=argv[ERRFILE];  
   }
 }
 
-/******** DA FARE */
-void cmd_handler(char *cmd){
-  execution(cmd,0,strlen(cmd));
-}
-
- /*./runexe $format $log $cmd*/
+ /*./runexe $format $log $cmd $errfile $outfile */
 int main(int argc, char *argv[]){
-  //input manager(argv);
-  pid_t daemon_pid = create_daemon(argv[FORMAT], argv[LOG]);
-  dpid = daemon_pid;
-  printf("dai dai");
-  fflush(stdout);
+  write_run2daemon(argv);                        //salvo gli argomenti
+  dpid = create_daemon();                        //creo il daemon se non esiste, se esiste recupero il suo pid;
   int res [strlen(argv[CMD])];
-  if (analize_cmd(argv[CMD], res) != 0)
-    pipe_handler(argv[CMD],res);
+  if (analize_cmd(argv[CMD], res) != 0)          //controllo se il comando comprende dei pipe ("|" or "|&")
+    pipe_handler(argv[CMD],res);                 //se ci sono pipe li eseguo in parallelo
   else
-    cmd_handler(argv[CMD]);
+    cmd_handler(argv[CMD]);                      //se non ci sono pipe esguo solo il comando
   wait(NULL);
   exit(EXIT_SUCCESS);
 }
 
 
-
-
-
-
-//NICE SHIT TO DO
-/*  
-void die(const char *msg) {
-    perror(msg);
-    exit(EXIT_FAILURE);
-}
-*/
+//TODO RESET DAEMON!!!
