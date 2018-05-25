@@ -1,41 +1,24 @@
-#include "mytime.h" //time_w(); ctime_w(time_t &time); difftime_w(time_t end, time_t beginning);
-//#include "config.h"
-#include <sys/ipc.h>
-#include <signal.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <syslog.h>
-#include <fcntl.h> //read write
-#include <unistd.h>
-#include <string.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <sys/stat.h>  
-
+#include "mytime.h" 
 #define START 0
 #define END 1
-#define MAXPID 17
 #define MAXPIPE 2
 #define STD 0
 #define COMPLETE 1
+#define MAXFILE 64    //max of char in a file name
 
-time_t start_clock[MAXPIPE];
-time_t stop_clock[MAXPIPE];
-pid_t dpid;
+time_t start_clock[MAXPIPE];  //start clock
+time_t stop_clock[MAXPIPE];   //end clock
+pid_t dpid;                   //daemon pid
 
+char *pidlog = "/tmp/daemon_pid.txt";        //where to save daemon pid
+char *run2daemon = "/tmp/run2daemon.txt";    //shared file with the main process
 
-char *pidlog = "/tmp/daemon_pid.txt";  
-char *run2daemon = "/tmp/run2daemon.txt";
 int pipecounterstart;
 int pipecounterstop;
 int id;
-long position = 0;
 
-
-char LogFile[20];
-char FormatType[20];
-char *output_file = "Log.txt";
-char *output_format = "STD";
+char LogFile[MAXFILE];
+char FormatType[MAXFILE];
 
 void signal_handler();
 void sighandle_int(int);
@@ -47,19 +30,21 @@ void std_format(FILE *);
 void init();
 
 
-
+/* read what cmd has been used and his return code */
 int read_info(char *cmd){
     int res,len;
-    char *infolog = "/tmp/inforun.txt";
-    int fd = open(infolog, O_RDONLY);
-    //lseek(fd, position, SEEK_SET);
-    read(fd, &len, sizeof(int));
-    read(fd, cmd,  ((strlen(cmd))*(sizeof(char))));
-    read(fd, &res, sizeof(int));
-    //fflush(fd);
-    //position = lseek(fd, position, SEEK_CUR);
-    close(fd);
-    remove (infolog);
+    char *infolog = "/tmp/inforun.txt";  
+    FILE *fd = fopen(infolog, "r");       //open file 
+    if (!fd){
+      fprintf(stderr,"error: failed fopen\n");
+      exit(EXIT_FAILURE);
+    }
+    fscanf(fd, "%d",&len);
+    fscanf(fd, "%s",cmd);
+    fscanf(fd, "%d",&res);
+    fflush(fd);
+    fclose_w(fd);                           //close file
+    remove_w(infolog);                      //delete file
     return res;
 }
 
@@ -72,11 +57,9 @@ void std_format(FILE *out){
     time_string = ctime_w(&start_clock[id]); 
     fprintf(out,"\n\nProcess started at:%s", time_string);
     value = read_info(cmd_name);
-    fprintf(out,"\nProcess name: %s\n", cmd_name);
     fprintf(out,"\nProcess returned: %d\n", value);
     time_string = ctime_w(&stop_clock[id++]); 
     fprintf(out,"\nProcess ended   at:%s\n", time_string);
-    printf("stampato!\n");
 }
 
 /* format complete print function */
@@ -84,13 +67,16 @@ void complete_format(FILE *out){
     char *time_string;
     char *cmd_name;
     int value;
-    time_string = ctime_w(&start_clock[id]); 
-    fprintf(out,"\n\nProcess started at:%s\n", time_string);
-    fprintf(out,"\nProcess started at:%s\n", time_string);
+    time_string = ctime_w(&start_clock[id]);
+    fprintf(out,"\n\n---------------------------------------------------------------------------------------\n"); 
+    fprintf(out,"Process started at:%s\n", time_string);
     value = read_info(cmd_name);
-    fprintf(out,"\nProcess returned: %d\n", value);
+    fprintf(out,"\nProcess %s -->     %d\n",cmd_name, value); 
+    double diff = difftime_w(stop_clock[id], start_clock[id]);
     time_string = ctime_w(&stop_clock[id++]); 
-    fprintf(out,"Process ended   at:%s\n", time_string);
+    fprintf(out,"\nProcess ended   at:%s\n", time_string);
+    fprintf(out,"\nTotal time        :%f\n",diff);
+    fprintf(out,"---------------------------------------------------------------------------------------\n\n\n");
 }
 
 /* change from string format to a int format*/ 
@@ -107,9 +93,13 @@ int parse_format (char *format){
     return output_type;
 }
 
-/* decide quale tipo di formato utilizzare e da dove cominciare a leggere il file INFO */
+/* decide quale tipo di formato utilizzare e apre lo stream per il Log file*/
 void output_manager(){
     FILE *print = fopen(LogFile, "a+");
+    if (!print){
+      fprintf(stderr,"error: failed fopen\n");
+      exit(EXIT_FAILURE);
+    }
     
     int format = parse_format(FormatType);
     switch (format){
@@ -117,19 +107,19 @@ void output_manager(){
         case COMPLETE : complete_format(print) ; break;
         default: fprintf(stderr,"Error! Format type required not supported");  break;
     }
-    fclose(print);
+    fclose_w(print);
 }
 
+/* retrive Log and Format from a shared file*/ 
 void readrun2daemon (){
-  //retrive Log and Format
-  int fd = open(run2daemon, O_RDONLY);
-  read(fd, LogFile, sizeof(LogFile));
-  read(fd, FormatType, sizeof(FormatType));
-  strcpy(LogFile,"Log.txt");
-  strcpy(FormatType,"STD");
-  close(fd);
-  printf("finito readrun2daemon\n Logfile:%s\n Formattype:%s\n",LogFile,FormatType);
-  //retrive cmd and result
+  FILE *fd = fopen(run2daemon, "r");
+  if (!fd){
+      fprintf(stderr,"error: failed fopen\n");
+      exit(EXIT_FAILURE);
+    }
+  fscanf(fd, "%s",LogFile);
+  fscanf(fd, "%s",FormatType);
+  fclose_w(fd);
 }
 
 
@@ -137,44 +127,32 @@ void readrun2daemon (){
 
 
 
-//--------------------------_SIGNAL
+//--------------------------SIGNAL
 /* prende il segnale di inizio e fine processo per registrare i dati */
 void sighandle_int(int sig) {
   
   /*END OF THE EXECUTION*/
-  if (sig == SIGUSR2){   
-    ///////////////7
-    printf("hey man, here is: %d\n",getpid());                           
-    printf("\n\n ---- STOP  ---- \n\n");
-    fflush(stdout);
-    ///////////////7
-    
+  if (sig == SIGUSR2){       
     stop_clock[pipecounterstop++] = time_w();
   }
 
   /*START OF THE EXECUTION*/
   else if (sig == SIGUSR1){
-    ///////////////7
-    printf("\n\n ---- START  ---- \n\n");
-    fflush(stdout);
-    ///////////////7
-
     start_clock[pipecounterstart++] = time_w();
   }
 
-  else if (sig == SIGINT){
-    printf("STAMPO,,, : pipecounterstart:%d\n",pipecounterstart);                   //>>>>>>>>>>>>>>>cominciano qui i problemi
-    if (pipecounterstart == 1)
-      readrun2daemon();
+  /* PRINT SIGNAL */
+  else if (sig == SIGINT){   
+    readrun2daemon();
     output_manager(); 
   }
+  /* INIT SIGNAL */
   else if(sig == SIGCONT)
     init();
 
   else
     printf("Error: Signal: %d not handled by this function",sig);
-  signal_handler();
-  //sleep(1);                                
+  signal_handler();                               
 }
 
 /* init signal SIGUSR1 and SIGUSR2 and SIGINT*/
@@ -186,22 +164,15 @@ void signal_handler() {
 }
 
 
-
-
-
-
-
-
 //-------------------------------------------------CREATE DAEMON
 int daemonize(){
-  //printf("%s %s %s %s\n",name,path,outfile,infile);
   pid_t child;
   //fork, detach from process group leader
-  child=fork();
+  child=fork_w();
   if (child>0) { //parent
     exit(EXIT_SUCCESS);
   }
-  setsid();
+  setsid_w();
 
   //catch/ignore signals
   signal(SIGCHLD,SIG_IGN);
@@ -209,34 +180,24 @@ int daemonize(){
   signal_handler(); 
   
   //fork second time
-  child=fork();
+  child=fork_w();
   if( child>0 ) { //parent
     dpid=child;
-    fprintf(stdout,"dpid= %d",dpid);
     exit(EXIT_SUCCESS);
   }
   //new file permissions
   umask(0);
 
-  chdir("/home/chrx/OS/env/");
-
-  //Close all open file descriptors
-  /*int fd;
-  for( fd=sysconf(_SC_OPEN_MAX); fd>0; --fd )
-      close(fd);
-*/
-
-///////////////////7
-  fprintf(stdout, "name: mydaemo\nLOG_PID: %d\nLOG_DAEMON: %d",LOG_PID,LOG_DAEMON);
-  printf("process_id of CREATEDdaemon process %d \n", getpid());
-  fflush(stdout);
-///////////////////7
-
+  //save daemon pid on a file
   FILE *fp;
   fp = fopen(pidlog, "w");
+  if (!fp){
+      fprintf(stderr,"error: failed fopen\n");
+      exit(EXIT_FAILURE);
+    }
   fprintf(fp, "%d", getpid());
   fclose (fp);
-  while(1) {                  //rimane attivo
+  while(1) {                  //stay alive
     sleep(1);
   }
   return(0);
@@ -261,12 +222,9 @@ pid_t create_daemon(){
   while(fp==NULL)       //wait for the file to be written
     fp=fopen(pidlog,"r");
   fscanf(fp,"%d",&dpid);
-  fclose(fp);
-  ///////////////7//
-  printf("process_id of EXISTdaemon process %d \n", dpid);
-  ///////////////7
+  fclose_w(fp);
   signal_handler();
-  kill(dpid, SIGCONT);
+  kill_w(dpid, SIGCONT);
   return dpid;  
 }
 

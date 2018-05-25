@@ -1,16 +1,9 @@
 #ifndef REDIRECTION_H 
 #define REDIRECTION_H
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <fcntl.h>
-#include <sys/ipc.h>
-#include <sys/stat.h>
-#include <signal.h>
-#include <unistd.h>
-#include <string.h>
 //#include "config.h"
 //potrebbe non funzionare.
+//TO IMPLEMENT BETTER
 int fdout;
 int fderr;
 void redirect_stdout(char *outfile) {

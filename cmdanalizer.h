@@ -1,18 +1,9 @@
 #ifndef CMDANALIZER_H 
 #define CMDANALIZER_H
 
-#include <string.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <fcntl.h>
-#include <sys/ipc.h>
-#include <signal.h>
-#include <unistd.h>
-#include <string.h>
-
-#define NPIPE 1
-#define SPIPE 2
-#define READ 0
+#define NPIPE 1   //pipe "|""
+#define SPIPE 2   //pipe "|&"
+#define READ 0    
 #define WRITE 1
 #define NOT_EXIST_PIPE 0
 
@@ -27,13 +18,13 @@ void cmd_handler(char *);
 int analize_cmd (char *cmd, int *res){
   int i;
   int counter = 0;
-  for (i=0; i<strlen(cmd); i++) //init
+  for (i=0; i<strlen(cmd); i++)     //init
     res[i] = 0;  
   for (i=0; i<strlen(cmd); i++){
-    if (cmd[i] == '|'){    //se trova un simbolo '|'
-      if (cmd[i+1] == '|')  //se rappresenta un OR
-	res[++i] = 0;      //non fare niente
-      else{                //ALTRIMENTI se rappresenta un PIPE or un "|&"
+    if (cmd[i] == '|'){             //se trova un simbolo '|'
+      if (cmd[i+1] == '|')          //se rappresenta un OR
+	res[++i] = 0;                     //non fare niente
+      else{                         //ALTRIMENTI se rappresenta un PIPE or un "|&"
         if (cmd[i+1] == '&'){
           res[i]=2;
           counter++;
@@ -55,42 +46,47 @@ void parsecmd(char *argv, int start, int stop, char *res){
     res[i] = argv[start++];
 }
 
-/* create a pipe */ 
+/* create a pipe */
 void exec_pipe(char *cmd, int first, int limit, int end, char type){
+
   if (type=='n'){ //a pipe created by a "|"
-    int fd [2];
-    pipe (fd); /* Create an unamed pi2pe */
-    if (fork () != 0) { /* Parent, writer */
-      close (fd[READ]); /* Close unused end */
-      dup2 (fd[WRITE], 1); /* Duplicate used end to stdout */
-      close (fd[WRITE]); /* Close original used end */
-      execution(cmd, first, limit); /* Execute this part of the cmd */
-      perror ("connect"); /* Should never execute */
-    } else { /* Child, reader */
-      close (fd[WRITE]); /* Close unused end */
-      dup2 (fd[READ], 0); /* Duplicate used end to stdin */
-      close (fd[READ]); /* Close original used end */
-      execution(cmd, limit+1,end); /* Execute this part of the cmd */
-      perror ("connect"); /* Should never execute */
+    int i;
+    for( i=1; i<2; i++){
+      int pd[2];
+      pipe_w(pd);
+
+      if (!fork_w()) {
+        dup2_w(pd[1], 1); // remap output back to parent
+        execution(cmd, first, limit); /* Execute this part of the cmd */
+        exit(EXIT_FAILURE);
+      }
+
+      // remap output from previous child to input
+      dup2_w(pd[0], 0);
+      close_w(pd[1]);
     }
+    execution(cmd, limit+1,end); /* Execute this part of the cmd */
+    exit(EXIT_FAILURE);
   }
+
   if (type=='s'){ //a pipe created by a "|&"
-    int fd [2];
-    pipe (fd); /* Create an unamed pipe */
-    if (fork () != 0) { /* Parent, writer */
-      close (fd[READ]); /* Close unused end */
-      dup2 (fd[WRITE], 1); /* Duplicate used end to stdout */
-      dup2 (fd[WRITE], 2); /* Duplicate used end to stderr, this is required by '|&' */
-      close (fd[WRITE]); /* Close original used end */
-      execution(cmd, first,limit); /* Execute this part of the cmd */
-      perror ("connect"); /* Should never execute */
-    } else { /* Child, reader */
-      close (fd[WRITE]); /* Close unused end */
-      dup2 (fd[READ], 0); /* Duplicate used end to stdin */
-      close (fd[READ]); /* Close original used end */
-      execution(cmd, limit+2,end); /* Execute this part of the cmd */
-      perror ("connect"); /* Should never execute */
+  int i;
+  for( i=1; i<2; i++){
+    int pd[2];
+    pipe_w(pd);
+    if (!fork_w()) {
+      dup2_w(pd[1], 1); // remap output back to parent
+      dup2_w(pd[1], 2); // remap errput back to parent
+      execution(cmd, first, limit); /* Execute this part of the cmd */
+      exit(EXIT_FAILURE);
     }
+        // remap output from previous child to input
+    dup2_w(pd[0], 0);
+    close_w(pd[1]);
+    }
+
+  execution(cmd, limit+1,end); /* Execute this part of the cmd */
+  exit(EXIT_FAILURE);
   }
 }
 
@@ -100,7 +96,7 @@ void pipe_handler(char *cmd, int *res){
   for (i=0;i<strlen(cmd);i++){
     if (res[i]==NPIPE){
       exec_pipe(cmd,0,i,strlen(cmd),'n');  //funziona solo con una pipe
-      i=strlen(cmd);                       // per uscire dal ciclo, non so usare più di una pipe.
+      i=strlen(cmd);                       // esce dal ciclo
     } 
     if (res[i]==SPIPE){
       exec_pipe(cmd,0,i,strlen(cmd),'s');      
